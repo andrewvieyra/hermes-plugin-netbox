@@ -85,6 +85,9 @@ plugins:
         max_operations: 200      # cap per plan
         max_query_results: 500   # cap per netbox_query call
         max_plan_age_hours: 24   # older plans are refused by netbox_apply
+        audit_log: true          # append events to audit.jsonl
+        audit_log_path: ""       # empty = <HERMES_HOME>/plugin-data/netbox/audit.jsonl
+        audit_include_request: true  # record the triggering message (truncated) in the actor
 ```
 
 Environment variables:
@@ -146,7 +149,8 @@ Inside a session, `/netbox` gives an operator the same actions without going thr
 ```
 
 The same subcommands exist as `hermes netbox …` in the shell, useful for rolling back after a
-session has ended.
+session has ended. Both accept an unambiguous fragment of the plan id, so `/netbox apply 4f1a`
+works from a phone; the full id remains the canonical form in files and tool output.
 
 ## Safety model
 
@@ -166,11 +170,28 @@ session has ended.
   object with a new id and cannot restore objects that NetBox cascaded.
 - **Plans are bound.** A plan applies at most once, only against the NetBox URL it was built for,
   and only within `max_plan_age_hours`.
-- **No secrets in plans.** Plan files hold object data as returned by the API and never the token.
+- **No secrets in plans.** Plan files and the audit stream hold object data as returned by the API and never the token.
+- **Everything is attributed.** Each plan, apply and rollback records who asked, from which platform and chat, and the HTTP calls made. See [docs/audit.md](docs/audit.md).
 
 What this plugin does not do: it does not prompt the human itself. Confirmation is the model's
 job, driven by the skill and tool descriptions, and the operator's job through `/netbox` and the
 CLI. Scope the API token to the permissions you want the agent to have.
+
+## Audit trail
+
+Every plan, apply and rollback is recorded for review and for SIEM ingestion:
+
+- **In the plan file:** who requested the plan (`requested_by`), who applied and who rolled back
+  (`apply.actor`, `rollback.actor`), the environment it ran in (`audit`: host, OS user, Hermes and
+  plugin versions, NetBox version), and the HTTP call behind every journal entry.
+- **In an append-only event stream**, `<HERMES_HOME>/plugin-data/netbox/audit.jsonl`, one JSON
+  object per line: `plan_created`, `apply_started`, `step_done`, `apply_finished`, `rollback_*`,
+  and the refusals and rejections that never reached NetBox.
+
+The actor record distinguishes a model tool call from a human using `/netbox` or `hermes netbox`,
+and carries the gateway platform, chat, user, session, and the message that triggered the call.
+All timestamps are UTC. Point your collector at the file, or set `audit_log_path` to a path it
+already watches. Schema and examples: [docs/audit.md](docs/audit.md).
 
 ## Compatibility
 
@@ -205,6 +226,7 @@ diff.py       desired-vs-live comparison, writable conversion
 planner.py    operations -> plan (resolve, diff, preconditions)
 executor.py   apply with journal, rollback from journal
 store.py      plan persistence under plugin-data
+audit.py      actor capture and the audit.jsonl event stream
 settings.py   operator settings
 SKILL.md      bundled skill: the workflow the model follows
 ```

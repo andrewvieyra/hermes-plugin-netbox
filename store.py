@@ -13,7 +13,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 PLUGIN_NAME = "netbox"
 
@@ -63,7 +63,26 @@ class PlanStore:
             raise ValueError(f"invalid plan id {plan_id!r}")
         return self.directory / f"{plan_id}.json"
 
+    def create(self, plan: Dict[str, Any], *, attempts: int = 5) -> None:
+        """First save of a new plan. The file is created exclusively (``O_EXCL``), so an id that already
+        exists on disk can never be overwritten; on a collision the plan gets a fresh id and we retry."""
+        with self._lock:
+            for _ in range(attempts):
+                path = self._path(plan["id"])
+                plan["updated_at"] = now_iso()
+                payload = json.dumps(plan, indent=2, ensure_ascii=False, sort_keys=False, default=str)
+                try:
+                    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                except FileExistsError:
+                    plan["id"] = new_plan_id()
+                    continue
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(payload)
+                return
+            raise RuntimeError(f"could not allocate a unique plan id after {attempts} attempts")
+
     def save(self, plan: Dict[str, Any]) -> None:
+        """Persist an existing plan (atomic replace). Use :meth:`create` for a brand-new plan."""
         with self._lock:
             path = self._path(plan["id"])
             tmp = path.with_suffix(".json.tmp")
@@ -93,6 +112,27 @@ class PlanStore:
                 plans.append(plan)
         plans.sort(key=lambda p: p.get("created_at", ""), reverse=True)
         return plans[: max(1, limit)]
+
+    def resolve(self, fragment: str) -> Tuple[str | None, List[str]]:
+        """Map what a human typed to a plan id. An exact id wins; otherwise an unambiguous suffix or
+        substring match (``4f1a`` or ``T193550Z-4f1a``) resolves. Returns ``(plan_id, candidates)``:
+        ``plan_id`` is None when nothing or more than one plan matches, and ``candidates`` lists the
+        matches so the caller can show them."""
+        fragment = (fragment or "").strip()
+        if not fragment:
+            return None, []
+        with self._lock:
+            try:
+                if self._path(fragment).exists():
+                    return fragment, [fragment]
+            except ValueError:
+                return None, []
+            ids = sorted(p.stem for p in self.directory.glob("nbp-*.json"))
+        needle = fragment.lower()
+        candidates = [i for i in ids if i.lower().endswith("-" + needle) or i.lower().endswith(needle)]
+        if not candidates:
+            candidates = [i for i in ids if needle in i.lower()]
+        return (candidates[0], candidates) if len(candidates) == 1 else (None, candidates)
 
     def delete(self, plan_id: str) -> bool:
         with self._lock:

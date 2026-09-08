@@ -6,7 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Audit trail for SIEM ingestion: an actor record (model vs operator, platform, chat, user, session, triggering
+  message) on every plan, apply and rollback; an `audit` block per plan (host, OS user, Hermes, plugin and NetBox
+  versions); the HTTP method, path and status behind every journal entry; and an append-only `audit.jsonl` event
+  stream covering creation, checks, refusals, rejections, every step and every revert. Settings `audit_log`,
+  `audit_log_path`, `audit_include_request`. See `docs/audit.md`.
+
 ### Changed
+- `/netbox` and `hermes netbox` accept an unambiguous fragment of a plan id (`apply 4f1a`); ambiguous fragments list the candidates.
+- A new plan file is created exclusively; if a generated id already exists on disk the plan gets a fresh id instead of overwriting.
 - Plan ids use an ISO 8601 basic UTC timestamp: `nbp-20260908T193012Z-4f1a` instead of `nbp-20260908-193012-4f1a`. Existing plan files keep working; only newly created ids change.
 
 ## [0.1.0] - 2026-09-08

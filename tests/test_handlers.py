@@ -140,7 +140,9 @@ class Commands(PluginTestCase):
         self.assertIn("applicable: all preconditions hold", self.commands.slash_handler(f"check {plan['id']}"))
         self.assertIn("-> done", self.commands.slash_handler(f"apply {plan['id']}"))
         self.assertIn("Rollback: 1 reverted", self.commands.slash_handler(f"rollback {plan['id']}"))
-        self.assertIn("Error: unknown plan_id", self.commands.slash_handler("show nbp-x"))
+        self.assertIn("No plan matches", self.commands.slash_handler("show nbp-x"))
+        short = plan["id"].rsplit("-", 1)[1]
+        self.assertIn(plan["id"], self.commands.slash_handler(f"show {short}"))
         self.assertIn("Unknown subcommand", self.commands.slash_handler("frobnicate"))
         self.assertIn("Usage", self.commands.slash_handler("apply"))
         self.assertIn("4.3.0", self.commands.slash_handler("status"))

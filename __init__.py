@@ -12,8 +12,9 @@ from pathlib import Path
 
 from . import commands, handlers, schemas
 from .settings import Settings, set_settings
+from .version import __version__
 
-__version__ = "0.1.0"
+__all__ = ["__version__", "register"]
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,9 @@ _REQUIRES_ENV = ["NETBOX_URL", "NETBOX_TOKEN"]
 def register(ctx) -> None:
     """Called once by Hermes' plugin loader."""
     set_settings(Settings.from_ctx(ctx))
+    from . import audit
+
+    audit.set_audit_log(None)  # re-resolve path/enabled from the fresh settings
 
     for schema in schemas.ALL:
         name = schema["name"]

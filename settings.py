@@ -15,6 +15,9 @@ class Settings:
     max_operations: int = 200
     max_query_results: int = 500
     max_plan_age_hours: int = 24
+    audit_log: bool = True
+    audit_log_path: str = ""
+    audit_include_request: bool = True
 
     @classmethod
     def from_ctx(cls, ctx: Any) -> Settings:

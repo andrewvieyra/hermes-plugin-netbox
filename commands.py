@@ -7,7 +7,8 @@ import json
 import shlex
 from typing import Any, Dict, List
 
-from . import handlers
+from . import audit, handlers
+from .store import get_store
 
 _HELP = """\
 /netbox — NetBox change management
@@ -15,6 +16,7 @@ _HELP = """\
   status                      Connectivity check and NetBox version
   plans [status]              List saved plans (optionally filtered by status)
   show <plan_id>              Full diff, journal and rollback outcome of one plan
+                              (<plan_id> may be an unambiguous suffix, e.g. 4f1a)
   check <plan_id>             Re-verify a plan's preconditions without writing
   apply <plan_id> [--no-rollback]   Apply a reviewed plan
   rollback <plan_id> [--force]      Revert an applied plan from its journal
@@ -47,7 +49,9 @@ def _result(text: str, key: str | None = None) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
-def run(argv: List[str]) -> str:
+def run(argv: List[str], *, via: str = audit.VIA_SLASH) -> str:
+    """``via`` names the operator path for the audit trail: ``slash`` or ``cli``."""
+    actor = audit.capture_actor({}, via=via)
     if not argv or argv[0] in {"help", "-h", "--help"}:
         return _HELP
     cmd, rest = argv[0], argv[1:]
@@ -71,7 +75,11 @@ def run(argv: List[str]) -> str:
     if cmd in {"show", "check", "apply", "rollback"}:
         if not rest:
             return f"Usage: /netbox {cmd} <plan_id>"
-        plan_id = rest[0]
+        plan_id, candidates = get_store().resolve(rest[0])
+        if plan_id is None:
+            if not candidates:
+                return f"No plan matches {rest[0]!r}. Use /netbox plans to list them."
+            return f"{rest[0]!r} is ambiguous; matches:\n" + "\n".join(f"  {c}" for c in candidates)
         flags = set(rest[1:])
         if cmd == "show":
             data = json.loads(handlers.netbox_plans({"plan_id": plan_id}))
@@ -82,7 +90,7 @@ def run(argv: List[str]) -> str:
                 out += "\n\n" + data["report"]
             return out
         if cmd == "check":
-            data = json.loads(handlers.netbox_apply({"plan_id": plan_id, "dry_run": True}))
+            data = json.loads(handlers.netbox_apply({"plan_id": plan_id, "dry_run": True}, _actor=actor))
             if not data.get("success"):
                 return f"Error: {data.get('error')}"
             if data["applicable"]:
@@ -92,14 +100,16 @@ def run(argv: List[str]) -> str:
             )
         if cmd == "apply":
             return _result(
-                handlers.netbox_apply({"plan_id": plan_id, "rollback_on_failure": "--no-rollback" not in flags})
+                handlers.netbox_apply(
+                    {"plan_id": plan_id, "rollback_on_failure": "--no-rollback" not in flags}, _actor=actor
+                )
             )
-        return _result(handlers.netbox_rollback({"plan_id": plan_id, "force": "--force" in flags}))
+        return _result(handlers.netbox_rollback({"plan_id": plan_id, "force": "--force" in flags}, _actor=actor))
     return f"Unknown subcommand: {cmd}\n\n{_HELP}"
 
 
 def slash_handler(raw_args: str) -> str:
-    return run(_parse(raw_args))
+    return run(_parse(raw_args), via=audit.VIA_SLASH)
 
 
 # -- argparse wiring for ``hermes netbox ...`` ----------------------------------------------------
@@ -131,4 +141,4 @@ def cli_handler(args: Any) -> None:
         argv.append("--no-rollback")
     if getattr(args, "force", False):
         argv.append("--force")
-    print(run(argv))
+    print(run(argv, via=audit.VIA_CLI))

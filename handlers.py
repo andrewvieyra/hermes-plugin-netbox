@@ -14,6 +14,7 @@ import functools
 import json
 from typing import Any, Callable, Dict
 
+from . import audit
 from .client import NetBoxClient, NetBoxError, is_configured, validate_endpoint
 from .executor import ExecutionRefused, apply_plan, render_journal, rollback_plan
 from .planner import PlanError, build_plan, render_plan
@@ -85,6 +86,13 @@ def _bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
+def _actor_from(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Operator paths (slash command, CLI) pass a ready-made ``_actor``; a model tool call gets one captured
+    from Hermes' session context plus the ``task_id`` / ``session_id`` / ``user_task`` kwargs it passes."""
+    given = kwargs.get("_actor")
+    return dict(given) if isinstance(given, dict) else audit.capture_actor(kwargs, via=audit.VIA_MODEL)
+
+
 def _plan_summary(plan: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "plan_id": plan["id"],
@@ -126,11 +134,36 @@ def netbox_query(args: Dict[str, Any], **_: Any) -> str:
 
 
 @guarded
-def netbox_plan(args: Dict[str, Any], **_: Any) -> str:
+def netbox_plan(args: Dict[str, Any], **kwargs: Any) -> str:
     client = _client_factory()
     settings = get_settings()
-    plan = build_plan(client, args.get("operations"), str(args.get("description") or ""), settings)
-    get_store().save(plan)
+    actor = _actor_from(kwargs)
+    description = str(args.get("description") or "")
+    try:
+        plan = build_plan(client, args.get("operations"), description, settings, actor=actor)
+    except PlanError as exc:
+        audit.emit(
+            "plan_rejected",
+            plan_id=None,
+            actor=actor,
+            netbox_url=client.base_url,
+            description=description,
+            operations=len(args.get("operations") or []) if isinstance(args.get("operations"), list) else None,
+            errors=len(exc.errors),
+            first_error=exc.errors[0].get("error") if exc.errors else None,
+        )
+        raise
+    get_store().create(plan)
+    audit.emit(
+        "plan_created",
+        plan_id=plan["id"],
+        actor=actor,
+        netbox_url=plan["netbox_url"],
+        description=plan["description"],
+        summary=plan["summary"],
+        steps=len(plan["steps"]),
+        warnings=len(plan["warnings"]),
+    )
     changes = sum(plan["summary"].get(a, 0) for a in ("create", "update", "delete"))
     return _ok(
         **_plan_summary(plan),
@@ -146,16 +179,31 @@ def netbox_plan(args: Dict[str, Any], **_: Any) -> str:
 
 
 @guarded
-def netbox_apply(args: Dict[str, Any], **_: Any) -> str:
+def netbox_apply(args: Dict[str, Any], **kwargs: Any) -> str:
     plan_id = str(args.get("plan_id") or "").strip()
     store = get_store()
+    actor = _actor_from(kwargs)
     plan = store.load(plan_id)
     if plan is None:
+        audit.emit("apply_refused", plan_id=plan_id or None, actor=actor, netbox_url=None, reason="unknown plan_id")
         return _fail(f"unknown plan_id {plan_id!r}")
     client = _client_factory()
     dry_run = _bool(args.get("dry_run"), False)
     rollback = _bool(args.get("rollback_on_failure"), True)
-    plan = apply_plan(client, plan, store, get_settings(), rollback_on_failure=rollback, dry_run=dry_run)
+    try:
+        plan = apply_plan(
+            client, plan, store, get_settings(), rollback_on_failure=rollback, dry_run=dry_run, actor=actor
+        )
+    except ExecutionRefused as exc:
+        audit.emit(
+            "apply_refused",
+            plan_id=plan["id"],
+            actor=actor,
+            netbox_url=plan.get("netbox_url"),
+            reason=str(exc),
+            dry_run=dry_run,
+        )
+        raise
     if dry_run:
         conflicts = plan["checks"][-1]["conflicts"]
         return _ok(**_plan_summary(plan), dry_run=True, applicable=not conflicts, conflicts=conflicts)
@@ -174,14 +222,28 @@ def netbox_apply(args: Dict[str, Any], **_: Any) -> str:
 
 
 @guarded
-def netbox_rollback(args: Dict[str, Any], **_: Any) -> str:
+def netbox_rollback(args: Dict[str, Any], **kwargs: Any) -> str:
     plan_id = str(args.get("plan_id") or "").strip()
     store = get_store()
+    actor = _actor_from(kwargs)
     plan = store.load(plan_id)
     if plan is None:
+        audit.emit("rollback_refused", plan_id=plan_id or None, actor=actor, netbox_url=None, reason="unknown plan_id")
         return _fail(f"unknown plan_id {plan_id!r}")
     client = _client_factory()
-    plan = rollback_plan(client, plan, store, force=_bool(args.get("force"), False), reason="requested")
+    force = _bool(args.get("force"), False)
+    try:
+        plan = rollback_plan(client, plan, store, force=force, reason="requested", actor=actor)
+    except ExecutionRefused as exc:
+        audit.emit(
+            "rollback_refused",
+            plan_id=plan["id"],
+            actor=actor,
+            netbox_url=plan.get("netbox_url"),
+            reason=str(exc),
+            force=force,
+        )
+        raise
     rb = plan.get("rollback", {})
     return _json(
         {

@@ -115,6 +115,7 @@ class NetBoxClient:
 
             session = requests.Session()
         self._session = session
+        self.last_call: Dict[str, Any] = {}
 
     @classmethod
     def from_env(cls, env: Dict[str, str] | None = None, session: Any = None) -> NetBoxClient:
@@ -139,8 +140,10 @@ class NetBoxClient:
                 verify=self.verify_ssl,
             )
         except Exception as exc:  # transport failure — DNS, TLS, refused, timeout
+            self.last_call = {"method": method, "path": f"/api/{path}/", "status": 0}
             raise NetBoxError(f"{method} {url} failed: {exc}", method=method, path=path) from exc
         status = getattr(resp, "status_code", 0)
+        self.last_call = {"method": method, "path": f"/api/{path}/", "status": status}
         body: Any = None
         text = getattr(resp, "text", "") or ""
         if text:

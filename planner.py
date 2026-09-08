@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
+from .audit import environment
 from .client import NetBoxClient, NetBoxError, validate_endpoint
 from .diff import compute_changes, format_value, object_label, render_changes
 from .settings import Settings
@@ -129,10 +130,25 @@ def _step(index: int, action: str, op: Dict[str, Any], obj: Dict[str, Any] | Non
     return step
 
 
+def _netbox_version(client: NetBoxClient) -> str | None:
+    """Recorded for audit; a failure here must not fail planning."""
+    try:
+        return str(client.status().get("netbox-version") or "") or None
+    except Exception:
+        return None
+
+
 def build_plan(
-    client: NetBoxClient, operations: Any, description: str, settings: Settings, netbox_url: str = ""
+    client: NetBoxClient,
+    operations: Any,
+    description: str,
+    settings: Settings,
+    netbox_url: str = "",
+    *,
+    actor: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Validate, resolve and diff every operation; return a persisted-ready plan dict. Raises PlanError."""
+    """Validate, resolve and diff every operation; return a persisted-ready plan dict. Raises PlanError.
+    ``actor`` (see :mod:`audit`) is recorded as ``requested_by``."""
     if not isinstance(operations, list) or not operations:
         raise PlanError([_err(-1, "operations must be a non-empty list")])
     if len(operations) > settings.max_operations:
@@ -174,6 +190,8 @@ def build_plan(
         "warnings": warnings,
         "steps": steps,
         "journal": [],
+        "requested_by": actor,
+        "audit": {**environment(), "netbox_version": _netbox_version(client)},
     }
 
 

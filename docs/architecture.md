@@ -18,6 +18,7 @@
 | `planner` | Validate operations, resolve targets, diff, build the plan document | `client`, `diff`, `settings`, `store` |
 | `executor` | Preflight, per-step precondition, execute, journal, rollback | `client`, `diff`, `settings`, `store` |
 | `store` | Atomic JSON persistence of plans, process-wide store handle | Hermes `plugin_storage` (optional) |
+| `audit` | Actor capture from Hermes' session context; append-only `audit.jsonl` event stream | Hermes `gateway.session_context` (optional) |
 | `settings` | Operator settings with coercion and defaults | Hermes `ctx.get_config` (optional) |
 | `schemas` | Tool schemas | none |
 | `handlers` | Tool handlers: args to JSON, error mapping, client factory seam | everything above |
@@ -128,6 +129,12 @@ POST retried once; the dropped fields are journaled.
 - Handlers follow the contract `handler(args, **kwargs) -> str` and never raise.
 - The plan store uses `plugins.plugin_storage.plugin_data_dir` when available so plan files follow
   the active Hermes profile, with a plain `$HERMES_HOME/plugin-data/netbox` fallback.
+
+## Audit
+
+Actor records and the event stream are described in [audit.md](audit.md). The executor emits an
+event after every persisted state change, so the stream and the plan file never disagree about
+what was attempted; an audit write failure is logged and never fails the operation.
 
 ## Non-goals
 

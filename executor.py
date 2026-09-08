@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
+from . import audit
 from .client import NetBoxClient, NetBoxError
 from .diff import format_value, snapshot_to_payload
 from .settings import Settings
@@ -41,6 +42,20 @@ def _parse_iso(stamp: str) -> datetime | None:
 
 def _stamp_of(obj: Dict[str, Any] | None) -> str | None:
     return obj.get("last_updated") if isinstance(obj, dict) else None
+
+
+def _emit(event: str, plan: Dict[str, Any], actor: Dict[str, Any] | None, **details: Any) -> None:
+    audit.emit(event, plan_id=plan.get("id"), actor=actor, netbox_url=plan.get("netbox_url"), **details)
+
+
+def _step_fields(step: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "index": step["index"],
+        "action": step["action"],
+        "endpoint": step["endpoint"],
+        "object_id": step.get("object_id"),
+        "label": step.get("label"),
+    }
 
 
 # -- preflight -----------------------------------------------------------------------------------
@@ -145,13 +160,15 @@ def apply_plan(
     *,
     rollback_on_failure: bool = True,
     dry_run: bool = False,
+    actor: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Apply *plan* in order. Mutates and persists *plan*; returns it. Raises ExecutionRefused on preflight."""
     preflight_apply(plan, client, settings)
     if dry_run:
         conflicts = check_preconditions(client, plan)
-        plan.setdefault("checks", []).append({"at": now_iso(), "conflicts": conflicts})
+        plan.setdefault("checks", []).append({"at": now_iso(), "conflicts": conflicts, "actor": actor})
         store.save(plan)
+        _emit("plan_checked", plan, actor, conflicts=len(conflicts), applicable=not conflicts)
         return plan
 
     with store.lock:  # claim the plan so a concurrent apply of the same id is refused
@@ -161,8 +178,16 @@ def apply_plan(
         plan.update(current)
         plan["status"] = "applying"
         plan["journal"] = []
-        plan["apply"] = {"started_at": now_iso(), "rollback_on_failure": rollback_on_failure}
+        plan["apply"] = {"started_at": now_iso(), "rollback_on_failure": rollback_on_failure, "actor": actor}
         store.save(plan)
+    _emit(
+        "apply_started",
+        plan,
+        actor,
+        steps=len(plan["steps"]),
+        summary=plan.get("summary"),
+        rollback_on_failure=rollback_on_failure,
+    )
 
     failure: Dict[str, Any] | None = None
     for step in plan["steps"]:
@@ -178,6 +203,7 @@ def apply_plan(
                 }
             )
             store.save(plan)
+            _emit("step_skipped", plan, actor, **_step_fields(step), status="skipped")
             continue
         try:
             conflict = check_step_precondition(client, step)
@@ -197,6 +223,7 @@ def apply_plan(
             )
             failure = {"index": step["index"], "kind": "conflict", "error": conflict}
             store.save(plan)
+            _emit("step_conflict", plan, actor, **_step_fields(step), status="conflict", error=conflict)
             break
         try:
             entry = _execute_step(client, step)
@@ -211,28 +238,70 @@ def apply_plan(
                     "status": "failed",
                     "error": str(exc),
                     "netbox": exc.to_dict(),
+                    "request": dict(client.last_call),
                 }
             )
             failure = {"index": step["index"], "kind": "error", "error": str(exc)}
             store.save(plan)
+            _emit(
+                "step_failed",
+                plan,
+                actor,
+                **_step_fields(step),
+                status="failed",
+                error=str(exc),
+                http_status=exc.status,
+                request=dict(client.last_call),
+            )
             break
         entry["status"] = "done"
         entry["at"] = now_iso()
+        entry["request"] = dict(client.last_call)
         plan["journal"].append(entry)
         store.save(plan)
+        _emit(
+            "step_done",
+            plan,
+            actor,
+            **{**_step_fields(step), "object_id": entry.get("object_id")},  # a create learns its id here
+            status="done",
+            http_status=entry["request"].get("status"),
+            request=entry["request"],
+        )
 
     plan["apply"]["finished_at"] = now_iso()
     if failure is None:
         plan["status"] = "applied"
         plan["apply"]["outcome"] = "applied"
         store.save(plan)
+        _emit(
+            "apply_finished",
+            plan,
+            actor,
+            outcome="applied",
+            status=plan["status"],
+            done=sum(1 for e in plan["journal"] if e.get("status") == "done"),
+        )
         return plan
 
     plan["status"] = "failed"
     plan["apply"].update(outcome="failed", failed_step=failure["index"], failure=failure)
     store.save(plan)
+    _emit(
+        "apply_finished",
+        plan,
+        actor,
+        outcome="failed",
+        status=plan["status"],
+        failed_step=failure["index"],
+        failure_kind=failure["kind"],
+        error=failure["error"],
+        done=sum(1 for e in plan["journal"] if e.get("status") == "done"),
+    )
     if rollback_on_failure and any(e.get("status") == "done" for e in plan["journal"]):
-        rollback_plan(client, plan, store, force=False, reason=f"automatic after failure at step {failure['index']}")
+        rollback_plan(
+            client, plan, store, force=False, reason=f"automatic after failure at step {failure['index']}", actor=actor
+        )
     return plan
 
 
@@ -289,7 +358,13 @@ def _revert_entry(client: NetBoxClient, entry: Dict[str, Any], force: bool) -> T
 
 
 def rollback_plan(
-    client: NetBoxClient, plan: Dict[str, Any], store: PlanStore, *, force: bool = False, reason: str = ""
+    client: NetBoxClient,
+    plan: Dict[str, Any],
+    store: PlanStore,
+    *,
+    force: bool = False,
+    reason: str = "",
+    actor: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Revert every ``done`` journal entry in reverse order. Mutates and persists *plan*; returns it."""
     if plan.get("status") not in ROLLBACKABLE:
@@ -300,8 +375,15 @@ def rollback_plan(
         raise ExecutionRefused(f"plan was applied against {plan['netbox_url']} but NETBOX_URL is now {client.base_url}")
     pending = [e for e in plan.get("journal", []) if e.get("status") == "done" and e.get("revert_status") != "reverted"]
     plan["status"] = "rolling_back"
-    plan["rollback"] = {"started_at": now_iso(), "force": force, "reason": reason, "entries": len(pending)}
+    plan["rollback"] = {
+        "started_at": now_iso(),
+        "force": force,
+        "reason": reason,
+        "entries": len(pending),
+        "actor": actor,
+    }
     store.save(plan)
+    _emit("rollback_started", plan, actor, entries=len(pending), force=force, reason=reason)
 
     counts = {"reverted": 0, "conflict": 0, "failed": 0}
     for entry in reversed(pending):
@@ -312,14 +394,31 @@ def rollback_plan(
         entry["revert_status"] = status
         entry["revert_at"] = now_iso()
         entry["revert"] = details
+        entry["revert_request"] = dict(client.last_call)
         counts[status] += 1
         store.save(plan)
+        _emit(
+            f"revert_{status}",
+            plan,
+            actor,
+            index=entry.get("index"),
+            action=entry.get("action"),
+            endpoint=entry.get("endpoint"),
+            object_id=entry.get("object_id"),
+            label=entry.get("label"),
+            status=status,
+            error=details.get("error"),
+            new_object_id=details.get("new_object_id"),
+            http_status=client.last_call.get("status"),
+            request=dict(client.last_call),
+        )
 
     plan["rollback"].update(finished_at=now_iso(), **counts)
     plan["status"] = "rolled_back" if counts["conflict"] == 0 and counts["failed"] == 0 else "partially_rolled_back"
     if not pending:
         plan["status"] = "rolled_back"
     store.save(plan)
+    _emit("rollback_finished", plan, actor, status=plan["status"], force=force, reason=reason, **counts)
     return plan
 
 
