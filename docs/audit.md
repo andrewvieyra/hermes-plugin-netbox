@@ -64,8 +64,28 @@ and every journal entry records the HTTP call it made:
 "request": {"method": "PATCH", "path": "/api/dcim/devices/10/", "status": 200}
 ```
 
-A reverted entry adds `revert_request` for the inverse call. NetBox's own change log records the
-same writes on its side; the `path`, timestamps and the token's user let you join the two.
+A reverted entry adds `revert_request` for the inverse call.
+
+## NetBox's change log
+
+After every apply and rollback the plugin reads NetBox's object-changes for the run's time window
+(widened by a few seconds for clock skew) and attaches the matching records to each journal entry:
+
+```json
+"netbox_changes": [
+  {"id": 8123, "request_id": "0b7c4d2e-…", "time": "2026-09-08T19:35:50.412Z", "changed_object_type": "dcim.device"}
+]
+```
+
+Rollback writes get `revert_netbox_changes`. The `apply` and `rollback` blocks carry a summary,
+`{"linked": true, "matched": 3, "unmatched": 0, "window": [since, until]}`, or `{"linked": false,
+"error": …, "status": 403}` when the token cannot read the log. NetBox 4.x serves the log at
+`core/object-changes`, 3.x at `extras/object-changes`; both are tried. The lookup is one extra request
+per phase, never fails the operation, and can be turned off with `link_changelog: false`.
+
+With the ids in place, a plan's journal and NetBox's change log reference each other: from NetBox
+you can search by `request_id` to see the exact object diffs; from the audit stream, the
+`changelog_linked` event lists the request ids for the run.
 
 ## Events
 
@@ -96,6 +116,7 @@ One JSON object per line. Common fields on every event:
 | `apply_finished` | Outcome of the run | `outcome` (`applied` or `failed`), `status`, `done`, and on failure `failed_step`, `failure_kind`, `error` |
 | `rollback_refused` | Rollback preflight refused, or `write_mode` | `reason`, `force`, `write_mode` when that was the cause |
 | `plans_pruned` | Retention removed plan files (`plan_id` is null) | `max_age_days`, `count`, `plan_ids` |
+| `changelog_linked` | NetBox change-log lookup after an apply or rollback | `phase`, `linked`, `matched`, `unmatched`, `request_ids`; or `error`, `http_status` |
 | `rollback_started` | Reverting begins, newest entry first | `entries`, `force`, `reason` (`requested`, or `automatic after failure at step N`) |
 | `revert_reverted`, `revert_conflict`, `revert_failed` | Outcome of one inverse | `index`, `action`, `endpoint`, `object_id`, `label`, `error`, `new_object_id`, `http_status`, `request` |
 | `rollback_finished` | Outcome of the rollback | `status`, `reverted`, `conflict`, `failed`, `force`, `reason` |

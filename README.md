@@ -90,6 +90,7 @@ plugins:
         audit_include_request: true  # record the triggering message (truncated) in the actor
         write_mode: full         # full | operator_only | read_only
         plan_retention_days: 90  # prune plan files older than this; 0 keeps them forever
+        link_changelog: true     # attach NetBox object-change ids to the journal after apply/rollback
 ```
 
 Environment variables:
@@ -202,6 +203,9 @@ Every plan, apply and rollback is recorded for review and for SIEM ingestion:
 - **In the plan file:** who requested the plan (`requested_by`), who applied and who rolled back
   (`apply.actor`, `rollback.actor`), the environment it ran in (`audit`: host, OS user, Hermes and
   plugin versions, NetBox version), and the HTTP call behind every journal entry.
+- **Linked to NetBox's change log.** After each apply and rollback the matching object-change
+  records, with NetBox's `request_id`, are attached to the journal, so the two audit trails reference
+  each other.
 - **In an append-only event stream**, `<HERMES_HOME>/plugin-data/netbox/audit.jsonl`, one JSON
   object per line: `plan_created`, `apply_started`, `step_done`, `apply_finished`, `rollback_*`,
   and the refusals and rejections that never reached NetBox.

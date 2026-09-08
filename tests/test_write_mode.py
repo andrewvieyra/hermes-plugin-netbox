@@ -111,7 +111,7 @@ class CompactOutput(PluginTestCase):
         self.assertIn("new_object_id", rolled["journal"][0])
         self.assertEqual(
             set(rolled["rollback"]),
-            {"started_at", "finished_at", "reason", "force", "entries", "reverted", "conflict", "failed"},
+            {"started_at", "finished_at", "reason", "force", "entries", "reverted", "conflict", "failed", "changelog"},
         )
 
 

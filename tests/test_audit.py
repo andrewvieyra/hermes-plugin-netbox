@@ -174,9 +174,11 @@ class EventStream(_EnvMixin, PluginTestCase):
                 "apply_started",
                 "step_done",
                 "step_skipped",
+                "changelog_linked",
                 "apply_finished",
                 "rollback_started",
                 "revert_reverted",
+                "changelog_linked",
                 "rollback_finished",
             ],
         )
@@ -194,8 +196,8 @@ class EventStream(_EnvMixin, PluginTestCase):
         self.assertEqual(
             (step["index"], step["action"], step["object_id"], step["http_status"]), (0, "update", 10, 200)
         )
-        self.assertEqual(events[5]["outcome"], "applied")
-        self.assertEqual(events[8]["reverted"], 1)
+        self.assertEqual(events[6]["outcome"], "applied")
+        self.assertEqual(events[10]["reverted"], 1)
 
     def test_failure_emits_step_failed_and_automatic_rollback(self):
         out = self.call(
@@ -220,16 +222,18 @@ class EventStream(_EnvMixin, PluginTestCase):
                 "apply_started",
                 "step_done",
                 "step_failed",
+                "changelog_linked",
                 "apply_finished",
                 "rollback_started",
                 "revert_reverted",
+                "changelog_linked",
                 "rollback_finished",
             ],
         )
         failed = self.events()[3]
         self.assertEqual((failed["http_status"], failed["request"]["method"]), (500, "DELETE"))
-        self.assertEqual(self.events()[4]["outcome"], "failed")
-        self.assertIn("automatic", self.events()[5]["reason"])
+        self.assertEqual(self.events()[5]["outcome"], "failed")
+        self.assertIn("automatic", self.events()[6]["reason"])
 
     def test_refusals_and_rejections_are_audited(self):
         self.call("netbox_plan", {"description": "bad", "operations": [{"op": "update", "endpoint": "dcim/devices"}]})

@@ -73,6 +73,10 @@ def journal_summary(journal: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         }
         if e.get("error"):
             item["error"] = e["error"]
+        if e.get("netbox_changes") is not None:
+            item["netbox_changes"] = [c.get("id") for c in e["netbox_changes"]]
+        if e.get("revert_netbox_changes") is not None:
+            item["revert_netbox_changes"] = [c.get("id") for c in e["revert_netbox_changes"]]
         if e.get("revert_status"):
             item["revert_status"] = e["revert_status"]
             revert = e.get("revert") or {}
@@ -313,6 +317,7 @@ def netbox_apply(args: Dict[str, Any], **kwargs: Any) -> str:
             **_plan_summary(plan),
             "outcome": outcome,
             "failure": plan.get("apply", {}).get("failure"),
+            "changelog": plan.get("apply", {}).get("changelog"),
             "rollback": _rollback_summary(plan.get("rollback")),
             "journal": journal_summary(plan["journal"]),
             "report": render_journal(plan),
@@ -323,10 +328,8 @@ def netbox_apply(args: Dict[str, Any], **kwargs: Any) -> str:
 def _rollback_summary(rb: Dict[str, Any] | None) -> Dict[str, Any] | None:
     if not rb:
         return None
-    return {
-        k: rb.get(k)
-        for k in ("started_at", "finished_at", "reason", "force", "entries", "reverted", "conflict", "failed")
-    }
+    keys = ("started_at", "finished_at", "reason", "force", "entries", "reverted", "conflict", "failed", "changelog")
+    return {k: rb.get(k) for k in keys}
 
 
 @guarded

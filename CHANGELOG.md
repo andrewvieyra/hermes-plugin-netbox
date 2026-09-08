@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-08
+
+### Added
+- Cross-reference to NetBox's own change log. After every apply and rollback the plugin reads NetBox's
+  object-changes for the run's time window and attaches the matching record ids, `request_id`s and object types to
+  each journal entry (`netbox_changes`, `revert_netbox_changes`), with a `changelog` summary on the `apply` and
+  `rollback` blocks and a `changelog_linked` audit event. Works with NetBox 4.x (`core/object-changes`) and 3.x
+  (`extras/object-changes`). Best effort: a token that cannot read the log is recorded as not linked and never
+  fails the operation. Setting `link_changelog` (default on).
+
 ## [0.2.0] - 2026-09-08
 
 ### Added

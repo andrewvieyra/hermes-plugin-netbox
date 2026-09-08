@@ -202,6 +202,24 @@ class NetBoxClient:
         total, results = self.list(endpoint, match, max_results=2)
         return total, (results[0] if total == 1 and results else None)
 
+    CHANGELOG_ENDPOINTS = ("core/object-changes", "extras/object-changes")  # NetBox 4.x, then 3.x
+
+    def object_changes(self, since: str, until: str, *, max_results: int = 1000) -> List[Dict[str, Any]]:
+        """NetBox change-log records with ``time`` between *since* and *until* (inclusive, ISO UTC).
+        Raises NetBoxError when neither endpoint exists or the token may not read the log (403)."""
+        params = {"time_after": since, "time_before": until, "ordering": "time"}
+        not_found: NetBoxError | None = None
+        for endpoint in self.CHANGELOG_ENDPOINTS:
+            try:
+                _, rows = self.list(endpoint, params, max_results=max_results, page_size=200)
+                return rows
+            except NetBoxError as exc:
+                if exc.status == 404:
+                    not_found = exc
+                    continue
+                raise
+        raise not_found or NetBoxError("object-changes endpoint not found")
+
     def create(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
         body = self.request("POST", validate_endpoint(endpoint), json=data)
         if not isinstance(body, dict) or "id" not in body:

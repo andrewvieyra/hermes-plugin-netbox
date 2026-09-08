@@ -22,6 +22,7 @@ class Settings:
     audit_include_request: bool = True
     write_mode: str = "full"  # full | operator_only | read_only
     plan_retention_days: int = 90  # 0 keeps plans forever
+    link_changelog: bool = True  # cross-reference NetBox's object-changes after apply/rollback
 
     @classmethod
     def from_ctx(cls, ctx: Any) -> Settings:

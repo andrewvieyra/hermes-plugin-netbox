@@ -1,7 +1,7 @@
 ---
 name: netbox-workflow
 description: Plan, review, apply and roll back NetBox changes with the netbox_* tools. Load when the user asks to read, add, change, move, rename, retire or bulk-edit anything in NetBox (devices, interfaces, IPs, prefixes, sites, racks, circuits, VMs).
-version: 0.2.0
+version: 0.3.0
 metadata:
   hermes:
     tags: [netbox, dcim, ipam, infrastructure, change-management]

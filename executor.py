@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Tuple
 from . import audit, timefmt
 from .client import NetBoxClient, NetBoxError
 from .diff import format_value, snapshot_to_payload
-from .settings import Settings
+from .settings import Settings, get_settings
 from .store import PlanStore, now_iso
 
 APPLYABLE = ("planned",)
@@ -56,6 +56,107 @@ def _step_fields(step: Dict[str, Any]) -> Dict[str, Any]:
         "object_id": step.get("object_id"),
         "label": step.get("label"),
     }
+
+
+# -- NetBox change-log cross-reference -------------------------------------------------------------
+
+_CLOCK_SKEW_SECONDS = 5
+
+
+def _shift(stamp: str, seconds: int) -> str:
+    parsed = _parse_iso(stamp) or datetime.now(timezone.utc)
+    shifted = parsed + timedelta(seconds=seconds)
+    return shifted.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _change_action(row: Dict[str, Any]) -> str:
+    action = row.get("action")
+    return str(action.get("value") if isinstance(action, dict) else action or "").lower()
+
+
+def _link_targets(entry: Dict[str, Any], phase: str) -> Tuple[Any, str, str] | None:
+    """``(object_id, action, journal_key)`` describing the write this entry made in *phase*, or None."""
+    if phase == "apply":
+        if entry.get("status") != "done":
+            return None
+        return entry.get("object_id"), entry.get("action", ""), "netbox_changes"
+    if entry.get("revert_status") != "reverted":
+        return None
+    inverse = entry.get("inverse") or {}
+    details = entry.get("revert") or {}
+    if details.get("note") == "object already gone":
+        return None  # nothing was written
+    action = inverse.get("action", "")
+    object_id = details.get("new_object_id") if action == "create" else inverse.get("object_id")
+    return object_id, action, "revert_netbox_changes"
+
+
+def _link_changelog(
+    client: NetBoxClient, plan: Dict[str, Any], store: PlanStore, phase: str, since: str, actor: Dict[str, Any] | None
+) -> None:
+    """Attach NetBox's own change-log records to each journal entry written in *phase*. Best effort:
+    a token that cannot read the log, or a NetBox without the endpoint, is recorded and never fails
+    the operation."""
+    if not get_settings().link_changelog:
+        return
+    window = (_shift(since, -_CLOCK_SKEW_SECONDS), _shift(now_iso(), _CLOCK_SKEW_SECONDS))
+    try:
+        rows = client.object_changes(window[0], window[1])
+    except NetBoxError as exc:
+        plan[phase]["changelog"] = {"linked": False, "error": str(exc), "status": exc.status, "window": window}
+        store.save(plan)
+        _emit("changelog_linked", plan, actor, phase=phase, linked=False, error=str(exc), http_status=exc.status)
+        return
+    matched = unmatched = 0
+    request_ids: set = set()
+    other_key = "revert_netbox_changes" if phase == "apply" else "netbox_changes"
+    # Records already attributed to the other phase can never be this phase's write; this matters when an
+    # apply and its rollback land within the skew window (same object, same action, seconds apart).
+    claimed = {c.get("id") for e in plan.get("journal", []) for c in (e.get(other_key) or [])}
+    strict = (since, _shift(now_iso(), 0))
+    for entry in plan.get("journal", []):
+        target = _link_targets(entry, phase)
+        if target is None:
+            continue
+        object_id, action, key = target
+        app = entry.get("endpoint", "").split("/")[0]
+        type_prefix = None if app == "plugins" else f"{app}."
+        hits = [
+            r
+            for r in rows
+            if r.get("id") not in claimed
+            and r.get("changed_object_id") == object_id
+            and _change_action(r) == action
+            and (type_prefix is None or str(r.get("changed_object_type", "")).startswith(type_prefix))
+        ]
+        if len(hits) > 1:  # prefer records inside the unwidened window; the skew margin is a fallback only
+            inside = [r for r in hits if strict[0] <= str(r.get("time", "")) <= strict[1]]
+            hits = inside or hits
+        claimed.update(r.get("id") for r in hits)
+        entry[key] = [
+            {
+                "id": r.get("id"),
+                "request_id": r.get("request_id"),
+                "time": r.get("time"),
+                "changed_object_type": r.get("changed_object_type"),
+            }
+            for r in hits
+        ]
+        request_ids.update(str(r.get("request_id")) for r in hits if r.get("request_id"))
+        matched += 1 if hits else 0
+        unmatched += 0 if hits else 1
+    plan[phase]["changelog"] = {"linked": True, "matched": matched, "unmatched": unmatched, "window": window}
+    store.save(plan)
+    _emit(
+        "changelog_linked",
+        plan,
+        actor,
+        phase=phase,
+        linked=True,
+        matched=matched,
+        unmatched=unmatched,
+        request_ids=sorted(request_ids),
+    )
 
 
 # -- preflight -----------------------------------------------------------------------------------
@@ -275,6 +376,7 @@ def apply_plan(
         )
 
     plan["apply"]["finished_at"] = now_iso()
+    _link_changelog(client, plan, store, "apply", plan["apply"]["started_at"], actor)
     if failure is None:
         plan["status"] = "applied"
         plan["apply"]["outcome"] = "applied"
@@ -431,6 +533,7 @@ def rollback_plan(
         )
 
     plan["rollback"].update(finished_at=now_iso(), **counts)
+    _link_changelog(client, plan, store, "rollback", plan["rollback"]["started_at"], actor)
     plan["status"] = "rolled_back" if counts["conflict"] == 0 and counts["failed"] == 0 else "partially_rolled_back"
     if not pending:
         plan["status"] = "rolled_back"

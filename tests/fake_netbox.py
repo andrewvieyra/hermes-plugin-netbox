@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List
 from urllib.parse import parse_qsl, urlsplit
@@ -41,6 +42,8 @@ class FakeNetBox:
         self.required_fields: Dict[str, List[str]] = {}  # endpoint -> fields that must be present on create
         self.reject_fields: Dict[str, List[str]] = {}  # endpoint -> fields that 400 on create (simulates cascade refs)
         self.version = "4.3.0"
+        self.changelog_endpoint = "core/object-changes"  # the other name 404s, like a real 4.x / 3.x
+        self.changelog_forbidden = False
         self._clock = datetime(2026, 9, 8, 12, 0, 0, tzinfo=timezone.utc)
 
     # -- fixtures -----------------------------------------------------------------------------
@@ -85,6 +88,12 @@ class FakeNetBox:
         rows = list(self.tables.get(endpoint, {}).values())
         for key, want in params.items():
             if key in {"limit", "offset", "fields", "brief", "ordering"}:
+                continue
+            if key == "time_after":
+                rows = [r for r in rows if r.get("time", "") >= want]
+                continue
+            if key == "time_before":
+                rows = [r for r in rows if r.get("time", "") <= want]
                 continue
             rows = [r for r in rows if self._matches(r, key, want)]
         return sorted(rows, key=lambda r: r["id"])
@@ -186,9 +195,31 @@ class FakeNetBox:
         m = re.match(r"^(.*?)/(\d+)$", rest)
         return (m.group(1), int(m.group(2))) if m else (rest, None)
 
+    def _record_change(self, endpoint: str, oid: int, action: str, request_id: str) -> None:
+        """Mimic NetBox's ObjectChange row for a write (times are real UTC, second resolution)."""
+        app, model = endpoint.split("/")[0], endpoint.split("/")[-1].replace("-", "").rstrip("s")
+        table = self.tables.setdefault(self.changelog_endpoint, {})
+        cid = max(table) + 1 if table else 1
+        stamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        table[cid] = {
+            "id": cid,
+            "time": stamp,
+            "user_name": "hermes",
+            "request_id": request_id,
+            "action": {"value": action, "label": action.title()},
+            "changed_object_type": f"{app}.{model}",
+            "changed_object_id": oid,
+        }
+
     def _dispatch(self, method: str, endpoint: str, oid: int | None, query: Dict[str, str], body: Any) -> _Response:
         if endpoint == "status":
             return _Response(200, {"netbox-version": self.version, "django-version": "5.1"})
+        if endpoint in {"core/object-changes", "extras/object-changes"}:
+            if endpoint != self.changelog_endpoint:
+                return _Response(404, {"detail": "Not found."})
+            if self.changelog_forbidden:
+                return _Response(403, {"detail": "You do not have permission to perform this action."})
+        request_id = str(uuid.uuid4())
         table = self.tables.setdefault(endpoint, {})
         if method == "GET" and oid is None:
             rows = self._filter(endpoint, query)
@@ -221,7 +252,9 @@ class FakeNetBox:
                 raise _FieldError(bad)
             data = self._serialise_in(endpoint, body or {})
             data.pop("id", None)
-            return _Response(201, self.seed(endpoint, data))
+            created = self.seed(endpoint, data)
+            self._record_change(endpoint, created["id"], "create", request_id)
+            return _Response(201, created)
         if method == "PATCH":
             obj = table.get(oid)
             if obj is None:
@@ -229,11 +262,13 @@ class FakeNetBox:
             updated = self._serialise_in(endpoint, body or {}, existing=obj)
             updated["last_updated"] = self._tick()
             table[oid] = updated
+            self._record_change(endpoint, oid, "update", request_id)
             return _Response(200, updated)
         if method == "DELETE":
             if oid not in table:
                 return _Response(404, {"detail": "Not found."})
             del table[oid]
+            self._record_change(endpoint, oid, "delete", request_id)
             return _Response(204, None)
         return _Response(405, {"detail": "Method not allowed."})
 
