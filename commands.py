@@ -7,7 +7,7 @@ import json
 import shlex
 from typing import Any, Dict, List
 
-from . import audit, handlers
+from . import audit, handlers, timefmt
 from .store import get_store
 
 _HELP = """\
@@ -20,6 +20,7 @@ _HELP = """\
   check <plan_id>             Re-verify a plan's preconditions without writing
   apply <plan_id> [--no-rollback]   Apply a reviewed plan
   rollback <plan_id> [--force]      Revert an applied plan from its journal
+  prune [--days N] [--dry-run]      Delete plans older than N days (default: plan_retention_days)
 """
 
 
@@ -70,7 +71,25 @@ def run(argv: List[str], *, via: str = audit.VIA_SLASH) -> str:
         for p in data["plans"]:
             s = p.get("summary", {})
             counts = ", ".join(f"{s.get(a, 0)}{a[0]}" for a in ("create", "update", "delete", "noop"))
-            lines.append(f"{p['plan_id']}  {p['status']:<20} {counts:<18} {p.get('description', '')}")
+            when = timefmt.local(p.get("created_at"))
+            lines.append(f"{p['plan_id']}  {p['status']:<20} {counts:<18} {when}  {p.get('description', '')}")
+        return "\n".join(lines)
+    if cmd == "prune":
+        days = None
+        dry = "--dry-run" in rest
+        if "--days" in rest:
+            try:
+                days = int(rest[rest.index("--days") + 1])
+            except (IndexError, ValueError):
+                return "Usage: /netbox prune [--days N] [--dry-run]"
+        result = handlers.prune_plans(days=days, dry_run=dry, actor=actor)
+        if result["max_age_days"] <= 0:
+            return "Retention is disabled (plan_retention_days is 0); pass --days N to prune explicitly."
+        if not result["removed"]:
+            return f"Nothing older than {result['max_age_days']} days."
+        verb = "Would remove" if dry else "Removed"
+        lines = [f"{verb} {len(result['removed'])} plan(s) older than {result['max_age_days']} days:"]
+        lines += [f"  {r['id']}  {r['status']:<20} {r['age_days']}d" for r in result["removed"]]
         return "\n".join(lines)
     if cmd in {"show", "check", "apply", "rollback"}:
         if not rest:
@@ -129,6 +148,9 @@ def setup_cli(parser: Any) -> None:
     p = sub.add_parser("rollback", help="Revert an applied plan")
     p.add_argument("plan_id")
     p.add_argument("--force", action="store_true", help="Override post-apply modification checks")
+    p = sub.add_parser("prune", help="Delete plans older than the retention period")
+    p.add_argument("--days", type=int, default=None, help="Override plan_retention_days")
+    p.add_argument("--dry-run", action="store_true", help="List what would be removed")
 
 
 def cli_handler(args: Any) -> None:
@@ -141,4 +163,8 @@ def cli_handler(args: Any) -> None:
         argv.append("--no-rollback")
     if getattr(args, "force", False):
         argv.append("--force")
+    if getattr(args, "days", None) is not None:
+        argv += ["--days", str(args.days)]
+    if getattr(args, "dry_run", False):
+        argv.append("--dry-run")
     print(run(argv, via=audit.VIA_CLI))

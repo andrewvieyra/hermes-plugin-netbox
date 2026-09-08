@@ -87,14 +87,15 @@ One JSON object per line. Common fields on every event:
 | `plan_created` | A plan was built and saved | `description`, `summary`, `steps`, `warnings` |
 | `plan_rejected` | Operations failed validation or resolution; nothing saved | `description`, `operations`, `errors`, `first_error` |
 | `plan_checked` | `dry_run` re-verified preconditions | `conflicts`, `applicable` |
-| `apply_refused` | Preflight refused: wrong status, stale plan, other NetBox, deletes disabled, unknown id, second apply | `reason`, `dry_run` |
+| `apply_refused` | Preflight refused: wrong status, stale plan, other NetBox, deletes disabled, unknown id, second apply, lock held, or `write_mode` | `reason`, `dry_run`, `write_mode` when that was the cause |
 | `apply_started` | Plan claimed and execution begins | `steps`, `summary`, `rollback_on_failure` |
 | `step_done` | One write succeeded | `index`, `action`, `endpoint`, `object_id`, `label`, `http_status`, `request` |
 | `step_skipped` | A `noop` step | `index`, `action`, `endpoint`, `object_id`, `label` |
 | `step_conflict` | The object changed since planning; run stops | `index`, …, `error` |
 | `step_failed` | NetBox rejected the write; run stops | `index`, …, `error`, `http_status`, `request` |
 | `apply_finished` | Outcome of the run | `outcome` (`applied` or `failed`), `status`, `done`, and on failure `failed_step`, `failure_kind`, `error` |
-| `rollback_refused` | Rollback preflight refused | `reason`, `force` |
+| `rollback_refused` | Rollback preflight refused, or `write_mode` | `reason`, `force`, `write_mode` when that was the cause |
+| `plans_pruned` | Retention removed plan files (`plan_id` is null) | `max_age_days`, `count`, `plan_ids` |
 | `rollback_started` | Reverting begins, newest entry first | `entries`, `force`, `reason` (`requested`, or `automatic after failure at step N`) |
 | `revert_reverted`, `revert_conflict`, `revert_failed` | Outcome of one inverse | `index`, `action`, `endpoint`, `object_id`, `label`, `error`, `new_object_id`, `http_status`, `request` |
 | `rollback_finished` | Outcome of the rollback | `status`, `reverted`, `conflict`, `failed`, `force`, `reason` |

@@ -18,6 +18,7 @@
 | `planner` | Validate operations, resolve targets, diff, build the plan document | `client`, `diff`, `settings`, `store` |
 | `executor` | Preflight, per-step precondition, execute, journal, rollback | `client`, `diff`, `settings`, `store` |
 | `store` | Atomic JSON persistence of plans, process-wide store handle | Hermes `plugin_storage` (optional) |
+| `timefmt` | UTC stamps rendered in the Hermes-configured zone for reports only | Hermes `hermes_time` (optional) |
 | `audit` | Actor capture from Hermes' session context; append-only `audit.jsonl` event stream | Hermes `gateway.session_context` (optional) |
 | `settings` | Operator settings with coercion and defaults | Hermes `ctx.get_config` (optional) |
 | `schemas` | Tool schemas | none |
@@ -81,8 +82,10 @@ planned ──apply──► applying ──all steps ok──► applied ──
                                                                                                              (retry until rolled_back)
 ```
 
-- `planned -> applying` happens under the store lock after re-reading the file, so two concurrent
-  applies of one plan cannot both proceed.
+- `planned -> applying` (and the rollback claim) happen under a cross-process file lock,
+  `<plans>/.lock`, after re-reading the file, so two applies of one plan cannot both proceed even from
+  different processes (gateway and CLI). A lock held longer than `PlanStore.claim_timeout` refuses
+  with a retry hint.
 - `failed` with no `done` journal entries has nothing to revert; automatic rollback is skipped and
   the status stays `failed` (the plan cannot be applied again; re-plan).
 - `partially_rolled_back` can be rolled back again; only entries not yet `reverted` are retried,
@@ -139,7 +142,8 @@ what was attempted; an audit write failure is logged and never fails the operati
 ## Non-goals
 
 - Human approval UI. Hermes plugins cannot open an approval prompt from inside a tool; the skill
-  and tool descriptions drive the model to ask, and `/netbox` gives operators a model-free path.
+  and tool descriptions drive the model to ask. `write_mode: operator_only` is the hard version of
+  that rule: the model cannot write at all and `/netbox` or the CLI is the only path.
 - Bulk endpoints, async apply, or parallel steps.
 - Schema-aware validation of `data` before apply. NetBox validates on write; the plan's rollback
   covers the failure.

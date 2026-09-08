@@ -6,6 +6,7 @@ interrupted apply leaves a file that ``netbox_rollback`` can act on.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import secrets
@@ -42,14 +43,34 @@ def new_plan_id() -> str:
 
 
 class PlanStore:
+    claim_timeout: float = 30.0  # seconds to wait for the cross-process lock when claiming a plan
+
     def __init__(self, directory: Path | None = None):
         self._dir = Path(directory) if directory else None
         self._lock = threading.RLock()
 
     @property
     def lock(self) -> threading.RLock:
-        """Process-wide lock callers take to make a read-modify-write of one plan atomic."""
+        """In-process lock; see :meth:`exclusive` for the cross-process one."""
         return self._lock
+
+    @contextlib.contextmanager
+    def exclusive(self, timeout: float = 30.0):
+        """Serialise plan claims across processes (gateway and ``hermes netbox`` run separately) with an
+        advisory lock on ``<plans>/.lock``. Holds the in-process lock too. Raises ``TimeoutError`` when
+        another holder does not release within *timeout* seconds; on platforms without file locking it
+        degrades to the in-process lock."""
+        with self._lock:
+            lock_path = self.directory / ".lock"
+            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                _acquire(fd, timeout)
+                try:
+                    yield
+                finally:
+                    _release(fd)
+            finally:
+                os.close(fd)
 
     @property
     def directory(self) -> Path:
@@ -134,6 +155,31 @@ class PlanStore:
             candidates = [i for i in ids if needle in i.lower()]
         return (candidates[0], candidates) if len(candidates) == 1 else (None, candidates)
 
+    def prune(self, max_age_days: int, *, now: datetime | None = None, dry_run: bool = False) -> List[Dict[str, Any]]:
+        """Remove plans whose last update is older than *max_age_days*. In-flight plans (``applying``,
+        ``rolling_back``) are never removed. Returns ``[{"id", "status", "age_days"}]`` for each plan
+        removed (or that would be, with *dry_run*). ``max_age_days <= 0`` disables pruning."""
+        if max_age_days <= 0:
+            return []
+        now = now or datetime.now(timezone.utc)
+        removed: List[Dict[str, Any]] = []
+        with self._lock:
+            for plan in self.list(limit=100_000):
+                if plan.get("status") in {"applying", "rolling_back"}:
+                    continue
+                stamp = plan.get("updated_at") or plan.get("created_at") or ""
+                try:
+                    updated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                age_days = (now - updated).total_seconds() / 86400
+                if age_days < max_age_days:
+                    continue
+                removed.append({"id": plan["id"], "status": plan.get("status"), "age_days": round(age_days, 1)})
+                if not dry_run:
+                    self._path(plan["id"]).unlink(missing_ok=True)
+        return removed
+
     def delete(self, plan_id: str) -> bool:
         with self._lock:
             path = self._path(plan_id)
@@ -141,6 +187,44 @@ class PlanStore:
                 path.unlink()
                 return True
             return False
+
+
+def _acquire(fd: int, timeout: float) -> None:
+    try:
+        import fcntl
+    except ImportError:  # Windows: msvcrt byte-range lock
+        import msvcrt
+
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("plan store is locked by another process") from None
+                time.sleep(0.05)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("plan store is locked by another process") from None
+            time.sleep(0.05)
+
+
+def _release(fd: int) -> None:
+    try:
+        import fcntl
+
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except ImportError:
+        import msvcrt
+
+        with contextlib.suppress(OSError):
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
 
 
 _store: PlanStore | None = None

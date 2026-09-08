@@ -88,6 +88,8 @@ plugins:
         audit_log: true          # append events to audit.jsonl
         audit_log_path: ""       # empty = <HERMES_HOME>/plugin-data/netbox/audit.jsonl
         audit_include_request: true  # record the triggering message (truncated) in the actor
+        write_mode: full         # full | operator_only | read_only
+        plan_retention_days: 90  # prune plan files older than this; 0 keeps them forever
 ```
 
 Environment variables:
@@ -146,6 +148,7 @@ Inside a session, `/netbox` gives an operator the same actions without going thr
 /netbox check <plan_id>
 /netbox apply <plan_id> [--no-rollback]
 /netbox rollback <plan_id> [--force]
+/netbox prune [--days N] [--dry-run]
 ```
 
 The same subcommands exist as `hermes netbox …` in the shell, useful for rolling back after a
@@ -169,13 +172,28 @@ works from a phone; the full id remains the canonical form in files and tool out
 - **Deletes are opt-in.** `allow_delete` defaults to false. Rollback of a delete re-creates the
   object with a new id and cannot restore objects that NetBox cascaded.
 - **Plans are bound.** A plan applies at most once, only against the NetBox URL it was built for,
-  and only within `max_plan_age_hours`.
+  and only within `max_plan_age_hours`. The claim is taken under a cross-process file lock, so the
+  gateway and the CLI cannot run the same plan concurrently.
 - **No secrets in plans.** Plan files and the audit stream hold object data as returned by the API and never the token.
 - **Everything is attributed.** Each plan, apply and rollback records who asked, from which platform and chat, and the HTTP calls made. See [docs/audit.md](docs/audit.md).
 
-What this plugin does not do: it does not prompt the human itself. Confirmation is the model's
-job, driven by the skill and tool descriptions, and the operator's job through `/netbox` and the
-CLI. Scope the API token to the permissions you want the agent to have.
+### Write modes
+
+Hermes plugins cannot open an approval prompt from inside a tool, so in the default `full` mode the
+confirmation step is the model asking you in chat and then calling `netbox_apply` after you say yes.
+That is behaviour, driven by the skill and the tool descriptions, not a lock. `write_mode` adds the lock:
+
+| `write_mode` | Who can write | Use it when |
+|---|---|---|
+| `full` | The model, after asking; and `/netbox`, `hermes netbox` | One trusted user in a direct message, no automation |
+| `operator_only` | Only `/netbox` in a session and `hermes netbox` in a shell. Model calls to apply and rollback are refused with the exact command to relay | Group chats, messaging gateways, cron jobs present, prompt-injection concerns, "a human must cause every write" |
+| `read_only` | Nobody. The apply and rollback tools are not registered for the model; `/netbox apply` refuses too | Drift audits, demos, first deployments |
+
+Plans persist across every Hermes surface on the same `HERMES_HOME`, so `operator_only` supports
+"plan from Signal, apply from the laptop." Refusals are written to the audit stream.
+
+Whatever the mode, scope the API token to the permissions you want the agent to have. A read-only
+token is the one safeguard NetBox enforces itself.
 
 ## Audit trail
 
@@ -227,6 +245,7 @@ planner.py    operations -> plan (resolve, diff, preconditions)
 executor.py   apply with journal, rollback from journal
 store.py      plan persistence under plugin-data
 audit.py      actor capture and the audit.jsonl event stream
+timefmt.py    UTC-to-local rendering for reports (Hermes' timezone setting)
 settings.py   operator settings
 SKILL.md      bundled skill: the workflow the model follows
 ```

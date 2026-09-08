@@ -1,5 +1,5 @@
 name: netbox
-version: 0.1.0
+version: 0.2.0
 manifest_version: 2
 api_version: 1
 description: "NetBox change management for Hermes: query objects, build a plan with a field-level diff, apply it with a journal, and roll back. Nothing is written without a reviewed plan."
@@ -57,3 +57,11 @@ config_schema:
     type: bool
     default: true
     description: "Record the user's triggering message (truncated to 500 characters) in the actor record."
+  write_mode:
+    type: str
+    default: full
+    description: "full: the model may apply after asking. operator_only: only /netbox and `hermes netbox` may apply or roll back. read_only: no writes at all; apply/rollback tools are hidden."
+  plan_retention_days:
+    type: int
+    default: 90
+    description: "Delete plan files older than this many days (in-flight plans are kept). 0 keeps plans forever."

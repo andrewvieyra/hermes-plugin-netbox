@@ -125,6 +125,28 @@ def capture_actor(kwargs: Dict[str, Any] | None = None, *, via: str = VIA_MODEL)
     return actor
 
 
+def describe_actor(actor: Dict[str, Any] | None) -> str:
+    """One human-readable phrase for reports: ``model via signal for Andrew in dm Andrew`` or
+    ``operator via cli (quartermaster)``."""
+    if not actor:
+        return "unknown"
+    where = actor.get("platform") or actor.get("source") or ("cli" if actor.get("via") == VIA_CLI else "unknown")
+    text = f"{actor.get('kind', 'unknown')} via {actor.get('via') or where}"
+    if actor.get("via") in {VIA_MODEL, VIA_SLASH} and where not in {actor.get("via"), None}:
+        text += f" on {where}"
+    who = actor.get("user_name") or actor.get("user_id")
+    if who:
+        text += f" for {who}"
+    elif actor.get("os_user"):
+        text += f" ({actor['os_user']})"
+    chat = actor.get("chat_name") or actor.get("chat_id")
+    if chat and actor.get("chat_type"):
+        text += f" in {actor['chat_type']} {chat}"
+    if actor.get("cron"):
+        text += " [cron]"
+    return text
+
+
 class AuditLog:
     """Append-only JSON Lines writer. One ``open`` per event keeps the file safe to rotate with
     ``copytruncate`` and lets several processes append without coordination (POSIX ``O_APPEND``)."""

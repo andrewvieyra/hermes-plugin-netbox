@@ -22,6 +22,7 @@ _PLUGIN_DIR = Path(__file__).parent
 _TOOLSET = "netbox"
 _EMOJI = {"netbox_query": "🔎", "netbox_plan": "📋", "netbox_apply": "🚀", "netbox_rollback": "⏪", "netbox_plans": "🗂️"}
 _REQUIRES_ENV = ["NETBOX_URL", "NETBOX_TOKEN"]
+_WRITE_TOOLS = {"netbox_apply", "netbox_rollback"}  # hidden from the model when write_mode is read_only
 
 
 def register(ctx) -> None:
@@ -38,7 +39,7 @@ def register(ctx) -> None:
             toolset=_TOOLSET,
             schema=schema,
             handler=handlers.HANDLERS[name],
-            check_fn=handlers.check_requirements,
+            check_fn=handlers.check_write_requirements if name in _WRITE_TOOLS else handlers.check_requirements,
             requires_env=_REQUIRES_ENV,
             emoji=_EMOJI.get(name, ""),
             description=schema["description"].split(". ")[0],

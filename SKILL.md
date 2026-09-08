@@ -1,7 +1,7 @@
 ---
 name: netbox-workflow
 description: Plan, review, apply and roll back NetBox changes with the netbox_* tools. Load when the user asks to read, add, change, move, rename, retire or bulk-edit anything in NetBox (devices, interfaces, IPs, prefixes, sites, racks, circuits, VMs).
-version: 0.1.0
+version: 0.2.0
 metadata:
   hermes:
     tags: [netbox, dcim, ipam, infrastructure, change-management]
@@ -38,6 +38,17 @@ Five tools, one rule: **nothing is written to NetBox without a plan the user has
 7. **Rollback on request.** `netbox_rollback` with the `plan_id`. Objects someone else edited after
    the apply are reported as conflicts; only use `force: true` if the user explicitly accepts
    overwriting those edits.
+
+## Write modes
+
+The operator sets `write_mode` in `config.yaml`. Read the refusal message and act on it:
+
+- `full` (default): you may call `netbox_apply` after the user confirms.
+- `operator_only`: `netbox_apply` and `netbox_rollback` refuse model calls. Tell the user the exact
+  command from the refusal, `/netbox apply <plan_id>` in this session or `hermes netbox apply <plan_id>`
+  in a shell, and stop. Do not retry the tool.
+- `read_only`: the apply and rollback tools are not available. Plans are still useful as a diff of what
+  would change; say so and stop.
 
 ## Writing `data`
 

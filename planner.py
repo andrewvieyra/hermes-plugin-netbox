@@ -20,7 +20,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Tuple
 
-from .audit import environment
+from . import timefmt
+from .audit import describe_actor, environment
 from .client import NetBoxClient, NetBoxError, validate_endpoint
 from .diff import compute_changes, format_value, object_label, render_changes
 from .settings import Settings
@@ -278,6 +279,7 @@ def render_plan(plan: Dict[str, Any]) -> str:
     lines = [
         f"Plan {plan['id']} ({plan['status']})" + (f" — {plan['description']}" if plan.get("description") else ""),
         f"NetBox: {plan.get('netbox_url', '')}",
+        f"Created: {timefmt.local(plan.get('created_at'))} by {describe_actor(plan.get('requested_by'))}",
     ]
     for step in plan["steps"]:
         lines += render_step(step)

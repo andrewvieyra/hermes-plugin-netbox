@@ -19,7 +19,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Tuple
 
-from . import audit
+from . import audit, timefmt
 from .client import NetBoxClient, NetBoxError
 from .diff import format_value, snapshot_to_payload
 from .settings import Settings
@@ -171,15 +171,20 @@ def apply_plan(
         _emit("plan_checked", plan, actor, conflicts=len(conflicts), applicable=not conflicts)
         return plan
 
-    with store.lock:  # claim the plan so a concurrent apply of the same id is refused
-        current = store.load(plan["id"]) or plan
-        if current.get("status") != "planned":
-            raise ExecutionRefused(f"plan {plan['id']} is {current.get('status')}; refusing to apply twice")
-        plan.update(current)
-        plan["status"] = "applying"
-        plan["journal"] = []
-        plan["apply"] = {"started_at": now_iso(), "rollback_on_failure": rollback_on_failure, "actor": actor}
-        store.save(plan)
+    # Claim the plan under the cross-process lock so a concurrent apply of the same id (gateway vs CLI)
+    # is refused rather than run twice.
+    try:
+        with store.exclusive(timeout=store.claim_timeout):
+            current = store.load(plan["id"]) or plan
+            if current.get("status") != "planned":
+                raise ExecutionRefused(f"plan {plan['id']} is {current.get('status')}; refusing to apply twice")
+            plan.update(current)
+            plan["status"] = "applying"
+            plan["journal"] = []
+            plan["apply"] = {"started_at": now_iso(), "rollback_on_failure": rollback_on_failure, "actor": actor}
+            store.save(plan)
+    except TimeoutError as exc:
+        raise ExecutionRefused(f"{exc}; another apply or rollback is in progress, try again shortly") from exc
     _emit(
         "apply_started",
         plan,
@@ -373,16 +378,28 @@ def rollback_plan(
         )
     if plan.get("netbox_url") and plan["netbox_url"].rstrip("/") != client.base_url:
         raise ExecutionRefused(f"plan was applied against {plan['netbox_url']} but NETBOX_URL is now {client.base_url}")
-    pending = [e for e in plan.get("journal", []) if e.get("status") == "done" and e.get("revert_status") != "reverted"]
-    plan["status"] = "rolling_back"
-    plan["rollback"] = {
-        "started_at": now_iso(),
-        "force": force,
-        "reason": reason,
-        "entries": len(pending),
-        "actor": actor,
-    }
-    store.save(plan)
+    try:
+        with store.exclusive(timeout=store.claim_timeout):
+            current = store.load(plan["id"]) or plan
+            if current.get("status") not in ROLLBACKABLE:
+                raise ExecutionRefused(
+                    f"plan {plan['id']} is {current.get('status')}; rollback needs one of {', '.join(ROLLBACKABLE)}"
+                )
+            plan.update(current)
+            pending = [
+                e for e in plan.get("journal", []) if e.get("status") == "done" and e.get("revert_status") != "reverted"
+            ]
+            plan["status"] = "rolling_back"
+            plan["rollback"] = {
+                "started_at": now_iso(),
+                "force": force,
+                "reason": reason,
+                "entries": len(pending),
+                "actor": actor,
+            }
+            store.save(plan)
+    except TimeoutError as exc:
+        raise ExecutionRefused(f"{exc}; another apply or rollback is in progress, try again shortly") from exc
     _emit("rollback_started", plan, actor, entries=len(pending), force=force, reason=reason)
 
     counts = {"reverted": 0, "conflict": 0, "failed": 0}
@@ -428,6 +445,8 @@ def rollback_plan(
 def render_journal(plan: Dict[str, Any]) -> str:
     lines = [f"Plan {plan['id']} ({plan['status']})"]
     apply = plan.get("apply") or {}
+    if apply.get("started_at"):
+        lines.append(f"Applied: {timefmt.local(apply['started_at'])} by {audit.describe_actor(apply.get('actor'))}")
     if apply.get("outcome") == "failed":
         f = apply.get("failure", {})
         lines.append(f"Apply FAILED at step {f.get('index')}: {f.get('error')}")
@@ -445,6 +464,8 @@ def render_journal(plan: Dict[str, Any]) -> str:
                 line += f" (re-created as #{details['new_object_id']})"
         lines.append(line)
     rb = plan.get("rollback")
+    if rb and rb.get("started_at"):
+        lines.append(f"Rolled back: {timefmt.local(rb['started_at'])} by {audit.describe_actor(rb.get('actor'))}")
     if rb and "reverted" in rb:
         lines.append(
             f"Rollback: {rb['reverted']} reverted, {rb['conflict']} conflicts, {rb['failed']} failed"

@@ -96,7 +96,9 @@ NETBOX_APPLY = _schema(
     "Apply a plan produced by netbox_plan, in order, with a persisted journal. Before each step the object is "
     "re-read and the step is refused if it changed since planning. On any failure the completed steps are "
     "rolled back automatically (unless rollback_on_failure is false). Only call this after the user has "
-    "reviewed the plan diff. dry_run=true re-checks preconditions and writes nothing.",
+    "reviewed the plan diff. dry_run=true re-checks preconditions and writes nothing. Returns a per-step "
+    "summary; netbox_plans with the plan_id returns the full journal. If the result says write_mode is "
+    "operator_only, relay the /netbox command it names to the user instead of retrying.",
     {
         "plan_id": {"type": "string", "description": "The plan_id returned by netbox_plan."},
         "rollback_on_failure": {
