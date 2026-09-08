@@ -87,7 +87,7 @@ class Planning(PluginTestCase):
         self.assertEqual(plan["summary"], {"create": 0, "update": 1, "delete": 0, "noop": 0})
         self.assertEqual(plan["status"], "planned")
         self.assertEqual(plan["netbox_url"], self.nb.base_url)
-        self.assertTrue(plan["id"].startswith("nbp-"))
+        self.assertRegex(plan["id"], r"^nbp-\d{8}T\d{6}Z-[0-9a-f]{4}$")
         self.assertEqual(len(self.nb.writes()), 0)
 
     def test_update_by_match_and_noop(self):

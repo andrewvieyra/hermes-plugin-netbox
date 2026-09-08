@@ -36,7 +36,9 @@ def now_iso() -> str:
 
 
 def new_plan_id() -> str:
-    return f"nbp-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}-{secrets.token_hex(2)}"
+    """``nbp-<ISO 8601 basic UTC timestamp>-<4 hex>``, e.g. ``nbp-20260908T193012Z-4f1a``: filename-safe
+    (no colons), sorts chronologically, and the ``Z`` makes the zone explicit."""
+    return f"nbp-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}-{secrets.token_hex(2)}"
 
 
 class PlanStore:

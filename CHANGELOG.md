@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- Plan ids use an ISO 8601 basic UTC timestamp: `nbp-20260908T193012Z-4f1a` instead of `nbp-20260908-193012-4f1a`. Existing plan files keep working; only newly created ids change.
+
 ## [0.1.0] - 2026-09-08
 
 ### Added

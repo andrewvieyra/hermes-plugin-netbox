@@ -12,7 +12,7 @@ journal in reverse.
 ```
 you    > Move sw1 to SFO and mark it planned.
 hermes > [netbox_query]  resolves site "sfo" -> id 2
-hermes > [netbox_plan]   Plan nbp-20260908-193012-4f1a (planned) — Move sw1 to SFO
+hermes > [netbox_plan]   Plan nbp-20260908T193012Z-4f1a (planned) — Move sw1 to SFO
                          [0] update dcim/devices #10 "sw1"
                                site: 1 -> 2
                                status: active -> planned

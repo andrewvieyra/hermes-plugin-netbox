@@ -31,7 +31,7 @@ Hermes imports at module load, which is why the whole engine is testable with pl
 
 ```jsonc
 {
-  "id": "nbp-20260908-193012-4f1a",
+  "id": "nbp-20260908T193012Z-4f1a",
   "version": 1,
   "status": "planned",            // planned | applying | applied | failed | rolling_back | rolled_back | partially_rolled_back
   "description": "Move sw1 to SFO",
