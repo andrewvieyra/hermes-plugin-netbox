@@ -6,6 +6,15 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-08
+
+### Added
+- Audit sinks (`audit_sinks` setting): forward every audit event to a syslog server (RFC 5424 over UDP, TCP or TLS;
+  body as JSON or ArcSight CEF; facility and severity mapping) and/or an HTTP collector (plain JSON or Splunk HEC
+  wrapper, `${VAR}` header placeholders resolved from the environment). Delivery runs on a background thread with a
+  bounded queue and retries; a sink can never delay or fail a NetBox operation, and the audit file remains the
+  source of truth. See `docs/sinks.md`.
+
 ## [0.3.0] - 2026-09-08
 
 ### Added

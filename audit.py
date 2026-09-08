@@ -193,6 +193,12 @@ class AuditLog:
                     fh.write(line + "\n")
         except Exception as exc:  # never let auditing break the operation it describes
             logger.warning("netbox audit log write failed (%s): %s", self.path, exc)
+        try:
+            from . import sinks
+
+            sinks.dispatch(record)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("netbox audit sinks unavailable: %s", exc)
         return record
 
 

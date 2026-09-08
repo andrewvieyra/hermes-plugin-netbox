@@ -133,6 +133,8 @@ on, `rollback_started`, one `revert_*` per completed step, `rollback_finished`.
 
 ## Ingestion notes
 
+- To push events instead of tailing the file, configure `audit_sinks` (syslog or HTTP). See [sinks.md](sinks.md).
+
 - The stream is newline-delimited JSON. Point Filebeat, Fluent Bit, Vector or the Splunk forwarder at
   the file with a JSON codec; every line is a self-contained record.
 - Map `ts` to your timestamp field (`@timestamp` in Elastic).

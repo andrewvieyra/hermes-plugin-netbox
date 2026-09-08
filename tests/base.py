@@ -28,10 +28,12 @@ class PluginTestCase(unittest.TestCase):
         self.settings_mod.set_settings(self.settings)
         self.handlers.set_client_factory(lambda: self.client)
         self.audit = submodule("audit")
+        self.sinks = submodule("sinks")  # fetched per test: the loader test re-imports the package
         self.audit_path = Path(self._tmp.name) / "audit.jsonl"
         self.audit.set_audit_log(self.audit.AuditLog(self.audit_path))
 
     def tearDown(self) -> None:
+        submodule("sinks").set_worker(None)
         self.audit.set_audit_log(None)
         self.handlers.set_client_factory(None)
         self.store_mod.set_store(None)

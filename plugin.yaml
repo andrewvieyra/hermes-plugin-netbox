@@ -1,5 +1,5 @@
 name: netbox
-version: 0.3.0
+version: 0.4.0
 manifest_version: 2
 api_version: 1
 description: "NetBox change management for Hermes: query objects, build a plan with a field-level diff, apply it with a journal, and roll back. Nothing is written without a reviewed plan."
@@ -69,3 +69,7 @@ config_schema:
     type: bool
     default: true
     description: "After apply and rollback, look up NetBox's own change log for the writes made and store the record ids and request ids in the journal."
+  audit_sinks:
+    type: list
+    default: []
+    description: "Forward audit events to syslog (udp/tcp/tls, json or CEF) and/or an HTTP collector (json or Splunk HEC). See docs/sinks.md."

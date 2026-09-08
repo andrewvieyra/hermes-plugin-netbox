@@ -91,6 +91,7 @@ plugins:
         write_mode: full         # full | operator_only | read_only
         plan_retention_days: 90  # prune plan files older than this; 0 keeps them forever
         link_changelog: true     # attach NetBox object-change ids to the journal after apply/rollback
+        audit_sinks: []          # optional syslog / HTTP forwarding, see docs/sinks.md
 ```
 
 Environment variables:
@@ -215,6 +216,10 @@ and carries the gateway platform, chat, user, session, and the message that trig
 All timestamps are UTC. Point your collector at the file, or set `audit_log_path` to a path it
 already watches. Schema and examples: [docs/audit.md](docs/audit.md).
 
+Installs without a log shipper can forward events directly: `audit_sinks` sends each event to a
+syslog server (UDP, TCP or TLS, JSON or CEF) and/or an HTTP collector such as Splunk HEC, from a
+background thread that never delays a NetBox operation. See [docs/sinks.md](docs/sinks.md).
+
 ## Compatibility
 
 - NetBox 3.5 through 4.x. The `fields` query parameter needs NetBox 4.0+; `brief` works everywhere.
@@ -250,6 +255,7 @@ executor.py   apply with journal, rollback from journal
 store.py      plan persistence under plugin-data
 audit.py      actor capture and the audit.jsonl event stream
 timefmt.py    UTC-to-local rendering for reports (Hermes' timezone setting)
+sinks.py      optional syslog / HTTP forwarding of audit events
 settings.py   operator settings
 SKILL.md      bundled skill: the workflow the model follows
 ```

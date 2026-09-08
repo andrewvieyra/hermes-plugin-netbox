@@ -5,8 +5,8 @@ Defaults are conservative: deletes are off, plans are capped, and stale plans ar
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from typing import Any, Dict
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List
 
 WRITE_MODES = ("full", "operator_only", "read_only")
 
@@ -23,18 +23,19 @@ class Settings:
     write_mode: str = "full"  # full | operator_only | read_only
     plan_retention_days: int = 90  # 0 keeps plans forever
     link_changelog: bool = True  # cross-reference NetBox's object-changes after apply/rollback
+    audit_sinks: List[Dict[str, Any]] = field(default_factory=list)  # see sinks.py
 
     @classmethod
     def from_ctx(cls, ctx: Any) -> Settings:
         """Build from a Hermes ``PluginContext``; every read is guarded so registration never fails."""
         base = cls()
         values: Dict[str, Any] = {}
-        for field, default in asdict(base).items():
+        for name, default in asdict(base).items():
             try:
-                raw = ctx.get_config(field, default=default)
+                raw = ctx.get_config(name, default=default)
             except Exception:
                 raw = default
-            values[field] = _coerce(raw, default)
+            values[name] = _coerce(raw, default)
         settings = cls(**values)
         if settings.write_mode not in WRITE_MODES:
             settings.write_mode = "full"
@@ -57,6 +58,8 @@ def _coerce(raw: Any, default: Any) -> Any:
         except (TypeError, ValueError):
             return default
         return value if value >= 0 else default
+    if isinstance(default, list):
+        return [x for x in raw if isinstance(x, dict)] if isinstance(raw, list) else default
     if isinstance(default, str):
         return str(raw).strip().lower() if raw is not None else default
     return raw if raw is not None else default

@@ -31,6 +31,9 @@ def register(ctx) -> None:
     from . import audit
 
     audit.set_audit_log(None)  # re-resolve path/enabled from the fresh settings
+    from . import sinks
+
+    sinks.set_worker(None)  # sinks are built lazily from the fresh settings on first event
 
     for schema in schemas.ALL:
         name = schema["name"]

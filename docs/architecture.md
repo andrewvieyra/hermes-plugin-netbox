@@ -19,6 +19,7 @@
 | `executor` | Preflight, per-step precondition, execute, journal, rollback | `client`, `diff`, `settings`, `store` |
 | `store` | Atomic JSON persistence of plans, process-wide store handle | Hermes `plugin_storage` (optional) |
 | `timefmt` | UTC stamps rendered in the Hermes-configured zone for reports only | Hermes `hermes_time` (optional) |
+| `sinks` | Optional syslog / HTTP forwarding of audit records on a background thread | none |
 | `audit` | Actor capture from Hermes' session context; append-only `audit.jsonl` event stream | Hermes `gateway.session_context` (optional) |
 | `settings` | Operator settings with coercion and defaults | Hermes `ctx.get_config` (optional) |
 | `schemas` | Tool schemas | none |
